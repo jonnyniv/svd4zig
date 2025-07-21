@@ -422,7 +422,7 @@ fn getChunk(line: []const u8) ?XmlChunk {
     var toker = mem.tokenizeAny(u8, trimmed, "<>"); //" =\n<>\"");
 
     if (toker.next()) |maybe_tag| {
-        var tag_toker = mem.tokenizeSequence(u8, maybe_tag, " =\"");
+        var tag_toker = mem.tokenizeAny(u8, maybe_tag, " =\"");
         chunk.tag = tag_toker.next() orelse return null;
         if (tag_toker.next()) |maybe_tag_property| {
             if (ascii.eqlIgnoreCase(maybe_tag_property, "derivedFrom")) {
