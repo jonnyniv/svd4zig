@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const Io = std.Io;
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const AutoHashMap = std.AutoHashMap;
@@ -7,6 +8,7 @@ const warn = std.debug.warn;
 
 /// Top Level
 pub const Device = struct {
+    alloc: Allocator,
     name: ArrayList(u8),
     version: ArrayList(u8),
     description: ArrayList(u8),
@@ -29,19 +31,20 @@ pub const Device = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator) !Self {
-        var name = ArrayList(u8).init(allocator);
-        errdefer name.deinit();
-        var version = ArrayList(u8).init(allocator);
-        errdefer version.deinit();
-        var description = ArrayList(u8).init(allocator);
-        errdefer description.deinit();
-        var peripherals = Peripherals.init(allocator);
-        errdefer peripherals.deinit();
+        var name = ArrayList(u8).empty;
+        errdefer name.deinit(allocator);
+        var version = ArrayList(u8).empty;
+        errdefer version.deinit(allocator);
+        var description = ArrayList(u8).empty;
+        errdefer description.deinit(allocator);
+        var peripherals = Peripherals.empty;
+        errdefer peripherals.deinit(allocator);
         var interrupts = Interrupts.init(allocator);
         errdefer interrupts.deinit();
 
         return Self{
             .name = name,
+            .alloc = allocator,
             .version = version,
             .description = description,
             .cpu = null,
@@ -56,44 +59,44 @@ pub const Device = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.name.deinit();
-        self.version.deinit();
-        self.description.deinit();
-        self.peripherals.deinit();
+        self.name.deinit(self.alloc);
+        self.version.deinit(self.alloc);
+        self.description.deinit(self.alloc);
+        self.peripherals.deinit(self.alloc);
         self.interrupts.deinit();
     }
 
-    pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, out_stream: anytype) !void {
+    pub fn format(self: Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         const name = if (self.name.items.len == 0) "unknown" else self.name.items;
         const version = if (self.version.items.len == 0) "unknown" else self.version.items;
         const description = if (self.description.items.len == 0) "unknown" else self.description.items;
 
-        try out_stream.print(
+        try writer.print(
             \\pub const device_name = "{s}";
             \\pub const device_revision = "{s}";
             \\pub const device_description = "{s}";
             \\
         , .{ name, version, description });
         if (self.cpu) |the_cpu| {
-            try out_stream.print("{}\n", .{the_cpu});
+            try writer.print("{f}\n", .{the_cpu});
         }
         // now print peripherals
         for (self.peripherals.items) |peripheral| {
-            try out_stream.print("{}\n", .{peripheral});
+            try writer.print("{f}\n", .{peripheral});
         }
         // now print interrupt table
-        try out_stream.writeAll("pub const interrupts = struct {\n");
+        try writer.writeAll("pub const interrupts = struct {\n");
         var iter = self.interrupts.iterator();
         while (iter.next()) |entry| {
             const interrupt = entry.value_ptr.*;
             if (interrupt.value) |int_value| {
-                try out_stream.print(
+                try writer.print(
                     "pub const {s} = {};\n",
                     .{ interrupt.name.items, int_value },
                 );
             }
         }
-        try out_stream.writeAll("};");
+        try writer.writeAll("};");
         return;
     }
 };
@@ -110,12 +113,12 @@ pub const Cpu = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator) !Self {
-        var name = ArrayList(u8).init(allocator);
-        errdefer name.deinit();
-        var revision = ArrayList(u8).init(allocator);
-        errdefer revision.deinit();
-        var endian = ArrayList(u8).init(allocator);
-        errdefer endian.deinit();
+        var name: ArrayList(u8) = .{};
+        errdefer name.deinit(allocator);
+        var revision: ArrayList(u8) = .{};
+        errdefer revision.deinit(allocator);
+        var endian: ArrayList(u8) = .{};
+        errdefer endian.deinit(allocator);
 
         return Self{
             .name = name,
@@ -134,8 +137,8 @@ pub const Cpu = struct {
         self.endian.deinit();
     }
 
-    pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, out_stream: anytype) !void {
-        try out_stream.writeAll("\n");
+    pub fn format(self: Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.writeAll("\n");
 
         const name = if (self.name.items.len == 0) "unknown" else self.name.items;
         const revision = if (self.revision.items.len == 0) "unknown" else self.revision.items;
@@ -143,7 +146,7 @@ pub const Cpu = struct {
         const mpu_present = self.mpu_present orelse false;
         const fpu_present = self.mpu_present orelse false;
         const vendor_systick_config = self.vendor_systick_config orelse false;
-        try out_stream.print(
+        try writer.print(
             \\pub const cpu = struct {{
             \\    pub const name = "{s}";
             \\    pub const revision = "{s}";
@@ -154,12 +157,12 @@ pub const Cpu = struct {
             \\
         , .{ name, revision, endian, mpu_present, fpu_present, vendor_systick_config });
         if (self.nvic_prio_bits) |prio_bits| {
-            try out_stream.print(
+            try writer.print(
                 \\    pub const nvic_prio_bits = {};
                 \\
             , .{prio_bits});
         }
-        try out_stream.writeAll("};");
+        try writer.writeAll("};");
         return;
     }
 };
@@ -167,6 +170,7 @@ pub const Cpu = struct {
 pub const Peripherals = ArrayList(Peripheral);
 
 pub const Peripheral = struct {
+    alloc: Allocator,
     name: ArrayList(u8),
     group_name: ArrayList(u8),
     description: ArrayList(u8),
@@ -177,16 +181,17 @@ pub const Peripheral = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator) !Self {
-        var name = ArrayList(u8).init(allocator);
-        errdefer name.deinit();
-        var group_name = ArrayList(u8).init(allocator);
-        errdefer group_name.deinit();
-        var description = ArrayList(u8).init(allocator);
-        errdefer description.deinit();
-        var registers = Registers.init(allocator);
-        errdefer registers.deinit();
+        var name: ArrayList(u8) = .{};
+        errdefer name.deinit(allocator);
+        var group_name: ArrayList(u8) = .{};
+        errdefer group_name.deinit(allocator);
+        var description: ArrayList(u8) = .{};
+        errdefer description.deinit(allocator);
+        var registers: Registers = .{};
+        errdefer registers.deinit(allocator);
 
         return Self{
+            .alloc = allocator,
             .name = name,
             .group_name = group_name,
             .description = description,
@@ -200,23 +205,23 @@ pub const Peripheral = struct {
         var the_copy = try Self.init(allocator);
         errdefer the_copy.deinit();
 
-        try the_copy.name.appendSlice(self.name.items);
-        try the_copy.group_name.appendSlice(self.group_name.items);
-        try the_copy.description.appendSlice(self.description.items);
+        try the_copy.name.appendSlice(self.alloc, self.name.items);
+        try the_copy.group_name.appendSlice(self.alloc, self.group_name.items);
+        try the_copy.description.appendSlice(self.alloc, self.description.items);
         the_copy.base_address = self.base_address;
         the_copy.address_block = self.address_block;
         for (self.registers.items) |self_register| {
-            try the_copy.registers.append(try self_register.copy(allocator));
+            try the_copy.registers.append(self.alloc, try self_register.copy(allocator));
         }
 
         return the_copy;
     }
 
     pub fn deinit(self: *Self) void {
-        self.name.deinit();
-        self.group_name.deinit();
-        self.description.deinit();
-        self.registers.deinit();
+        self.name.deinit(self.alloc);
+        self.group_name.deinit(self.alloc);
+        self.description.deinit(self.alloc);
+        self.registers.deinit(self.alloc);
     }
 
     pub fn isValid(self: Self) bool {
@@ -228,16 +233,16 @@ pub const Peripheral = struct {
         return true;
     }
 
-    pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, out_stream: anytype) !void {
-        try out_stream.writeAll("\n");
+    pub fn format(self: Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.writeAll("\n");
         if (!self.isValid()) {
-            try out_stream.writeAll("// Not enough info to print peripheral value\n");
+            try writer.writeAll("// Not enough info to print peripheral value\n");
             return;
         }
         const name = self.name.items;
         const description = if (self.description.items.len == 0) "No description" else self.description.items;
         const base_address = self.base_address.?;
-        try out_stream.print(
+        try writer.print(
             \\/// {s}
             \\pub const {s} = struct {{
             \\
@@ -245,16 +250,17 @@ pub const Peripheral = struct {
         , .{ description, name, base_address });
         // now print registers
         for (self.registers.items) |register| {
-            try out_stream.print("{}\n", .{register});
+            try writer.print("{f}\n", .{register});
         }
         // and close the peripheral
-        try out_stream.print("}};", .{});
+        try writer.print("}};", .{});
 
         return;
     }
 };
 
 pub const AddressBlock = struct {
+    alloc: Allocator,
     offset: ?u32,
     size: ?u32,
     usage: ArrayList(u8),
@@ -262,10 +268,11 @@ pub const AddressBlock = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator) !Self {
-        var usage = ArrayList(u8).init(allocator);
-        errdefer usage.deinit();
+        var usage: ArrayList(u8) = .{};
+        errdefer usage.deinit(allocator);
 
         return Self{
+            .alloc = allocator,
             .offset = null,
             .size = null,
             .usage = usage,
@@ -280,6 +287,7 @@ pub const AddressBlock = struct {
 pub const Interrupts = AutoHashMap(u32, Interrupt);
 
 pub const Interrupt = struct {
+    alloc: Allocator,
     name: ArrayList(u8),
     description: ArrayList(u8),
     value: ?u32,
@@ -287,12 +295,13 @@ pub const Interrupt = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator) !Self {
-        var name = ArrayList(u8).init(allocator);
-        errdefer name.deinit();
-        var description = ArrayList(u8).init(allocator);
-        errdefer description.deinit();
+        var name: ArrayList(u8) = .{};
+        errdefer name.deinit(allocator);
+        var description: ArrayList(u8) = .{};
+        errdefer description.deinit(allocator);
 
         return Self{
+            .alloc = allocator,
             .name = name,
             .description = description,
             .value = null,
@@ -302,16 +311,16 @@ pub const Interrupt = struct {
     pub fn copy(self: Self, allocator: Allocator) !Self {
         var the_copy = try Self.init(allocator);
 
-        try the_copy.name.append(self.name.items);
-        try the_copy.description.append(self.description.items);
+        try the_copy.name.append(self.alloc, self.name.items);
+        try the_copy.description.append(self.alloc, self.description.items);
         the_copy.value = self.value;
 
         return the_copy;
     }
 
     pub fn deinit(self: *Self) void {
-        self.name.deinit();
-        self.description.deinit();
+        self.name.deinit(self.alloc);
+        self.description.deinit(self.alloc);
     }
 
     pub fn isValid(self: Self) bool {
@@ -323,15 +332,15 @@ pub const Interrupt = struct {
         return true;
     }
 
-    pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, out_stream: anytype) !void {
-        try out_stream.writeAll("\n");
+    pub fn format(self: Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.writeAll("\n");
         if (!self.isValid()) {
-            try out_stream.writeAll("// Not enough info to print interrupt value\n");
+            try writer.writeAll("// Not enough info to print interrupt value\n");
             return;
         }
         const name = self.name.items;
         const description = if (self.description.items.len == 0) "No description" else self.description.items;
-        try out_stream.print(
+        try writer.print(
             \\/// {s}
             \\pub const {s} = {s};
             \\
@@ -342,6 +351,7 @@ pub const Interrupt = struct {
 const Registers = ArrayList(Register);
 
 pub const Register = struct {
+    alloc: Allocator,
     periph_containing: ArrayList(u8),
     name: ArrayList(u8),
     display_name: ArrayList(u8),
@@ -356,19 +366,20 @@ pub const Register = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator, periph: []const u8, reset_value: u32, size: u32) !Self {
-        var prefix = ArrayList(u8).init(allocator);
-        errdefer prefix.deinit();
-        try prefix.appendSlice(periph);
-        var name = ArrayList(u8).init(allocator);
-        errdefer name.deinit();
-        var display_name = ArrayList(u8).init(allocator);
-        errdefer display_name.deinit();
-        var description = ArrayList(u8).init(allocator);
-        errdefer description.deinit();
-        var fields = Fields.init(allocator);
-        errdefer fields.deinit();
+        var prefix: ArrayList(u8) = .{};
+        errdefer prefix.deinit(allocator);
+        try prefix.appendSlice(allocator, periph);
+        var name: ArrayList(u8) = .{};
+        errdefer name.deinit(allocator);
+        var display_name: ArrayList(u8) = .{};
+        errdefer display_name.deinit(allocator);
+        var description: ArrayList(u8) = .{};
+        errdefer description.deinit(allocator);
+        var fields: Fields = .{};
+        errdefer fields.deinit(allocator);
 
         return Self{
+            .alloc = allocator,
             .periph_containing = prefix,
             .name = name,
             .display_name = display_name,
@@ -383,13 +394,13 @@ pub const Register = struct {
     pub fn copy(self: Self, allocator: Allocator) !Self {
         var the_copy = try Self.init(allocator, self.periph_containing.items, self.reset_value, self.size);
 
-        try the_copy.name.appendSlice(self.name.items);
-        try the_copy.display_name.appendSlice(self.display_name.items);
-        try the_copy.description.appendSlice(self.description.items);
+        try the_copy.name.appendSlice(self.alloc, self.name.items);
+        try the_copy.display_name.appendSlice(self.alloc, self.display_name.items);
+        try the_copy.description.appendSlice(self.alloc, self.description.items);
         the_copy.address_offset = self.address_offset;
         the_copy.access = self.access;
         for (self.fields.items) |self_field| {
-            try the_copy.fields.append(try self_field.copy(allocator));
+            try the_copy.fields.append(self.alloc, try self_field.copy(allocator));
         }
 
         return the_copy;
@@ -431,7 +442,7 @@ pub const Register = struct {
     fn alignedEndOfUnusedChunk(chunk_start: u32, last_unused: u32) u32 {
         // Next multiple of 8 from chunk_start + 1
         const next_multiple = (chunk_start + 8) & ~@as(u32, 7);
-        return std.mem.min(u32, &[_]u32{next_multiple, last_unused});
+        return std.mem.min(u32, &[_]u32{ next_multiple, last_unused });
     }
 
     fn writeUnusedField(first_unused: u32, last_unused: u32, reg_reset_value: u32, out_stream: anytype) !void {
@@ -453,17 +464,17 @@ pub const Register = struct {
         }
     }
 
-    pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, out_stream: anytype) !void {
-        try out_stream.writeAll("\n");
+    pub fn format(self: Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.writeAll("\n");
         if (!self.isValid()) {
-            try out_stream.writeAll("// Not enough info to print register value\n");
+            try writer.writeAll("// Not enough info to print register value\n");
             return;
         }
         const name = self.name.items;
         // const periph = self.periph_containing.items;
         const description = if (self.description.items.len == 0) "No description" else self.description.items;
         // print packed struct containing fields
-        try out_stream.print(
+        try writer.print(
             \\/// {s}
             \\const {s}_val = packed struct {{
         , .{ name, name });
@@ -474,26 +485,26 @@ pub const Register = struct {
         var last_uncovered_bit: u32 = 0;
         for (self.fields.items) |field| {
             if ((field.bit_offset == null) or (field.bit_width == null)) {
-                try out_stream.writeAll("// Not enough info to print register\n");
+                try writer.writeAll("// Not enough info to print register\n");
                 return;
             }
 
             const bit_offset = field.bit_offset.?;
             const bit_width = field.bit_width.?;
             if (last_uncovered_bit != bit_offset) {
-                try writeUnusedField(last_uncovered_bit, bit_offset, self.reset_value, out_stream);
+                try writeUnusedField(last_uncovered_bit, bit_offset, self.reset_value, writer);
             }
-            try out_stream.print("{}", .{field});
+            try writer.print("{f}", .{field});
             last_uncovered_bit = bit_offset + bit_width;
         }
 
         // Check if we need padding at the end
         if (last_uncovered_bit != 32) {
-            try writeUnusedField(last_uncovered_bit, 32, self.reset_value, out_stream);
+            try writeUnusedField(last_uncovered_bit, 32, self.reset_value, writer);
         }
 
         // close the struct and init the register
-        try out_stream.print(
+        try writer.print(
             \\
             \\}};
             \\/// {s}
@@ -513,6 +524,7 @@ pub const Access = enum {
 pub const Fields = ArrayList(Field);
 
 pub const Field = struct {
+    alloc: Allocator,
     periph: ArrayList(u8),
     register: ArrayList(u8),
     register_reset_value: u32,
@@ -526,18 +538,19 @@ pub const Field = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator, periph_containing: []const u8, register_containing: []const u8, register_reset_value: u32) !Self {
-        var periph = ArrayList(u8).init(allocator);
-        try periph.appendSlice(periph_containing);
-        errdefer periph.deinit();
-        var register = ArrayList(u8).init(allocator);
-        try register.appendSlice(register_containing);
-        errdefer register.deinit();
-        var name = ArrayList(u8).init(allocator);
-        errdefer name.deinit();
-        var description = ArrayList(u8).init(allocator);
-        errdefer description.deinit();
+        var periph: ArrayList(u8) = .{};
+        try periph.appendSlice(allocator, periph_containing);
+        errdefer periph.deinit(allocator);
+        var register: ArrayList(u8) = .{};
+        try register.appendSlice(allocator, register_containing);
+        errdefer register.deinit(allocator);
+        var name: ArrayList(u8) = .{};
+        errdefer name.deinit(allocator);
+        var description: ArrayList(u8) = .{};
+        errdefer description.deinit(allocator);
 
         return Self{
+            .alloc = allocator,
             .periph = periph,
             .register = register,
             .register_reset_value = register_reset_value,
@@ -551,8 +564,8 @@ pub const Field = struct {
     pub fn copy(self: Self, allocator: Allocator) !Self {
         var the_copy = try Self.init(allocator, self.periph.items, self.register.items, self.register_reset_value);
 
-        try the_copy.name.appendSlice(self.name.items);
-        try the_copy.description.appendSlice(self.description.items);
+        try the_copy.name.appendSlice(self.alloc, self.name.items);
+        try the_copy.description.appendSlice(self.alloc, self.description.items);
         the_copy.bit_offset = self.bit_offset;
         the_copy.bit_width = self.bit_width;
         the_copy.access = self.access;
@@ -574,14 +587,14 @@ pub const Field = struct {
         return shifted_reset_value & reset_value_mask;
     }
 
-    pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, out_stream: anytype) !void {
-        try out_stream.writeAll("\n");
+    pub fn format(self: Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.writeAll("\n");
         if (self.name.items.len == 0) {
-            try out_stream.writeAll("// No name to print field value\n");
+            try writer.writeAll("// No name to print field value\n");
             return;
         }
         if ((self.bit_offset == null) or (self.bit_width == null)) {
-            try out_stream.writeAll("// Not enough info to print field\n");
+            try writer.writeAll("// Not enough info to print field\n");
             return;
         }
         const name = self.name.items;
@@ -591,7 +604,7 @@ pub const Field = struct {
         const bit_width = self.bit_width.?;
         const reg_reset_value = self.register_reset_value;
         const reset_value = fieldResetValue(start_bit, bit_width, reg_reset_value);
-        try out_stream.print(
+        try writer.print(
             \\/// {s} [{}:{}]
             \\/// {s}
             \\{s}: u{} = {},
@@ -627,8 +640,8 @@ test "Field print" {
     var field = try Field.init(allocator, "PERIPH", "RND", 0b101);
     defer field.deinit();
 
-    try field.name.appendSlice("RNGEN");
-    try field.description.appendSlice("RNGEN comment");
+    try field.name.appendSlice(allocator, "RNGEN");
+    try field.description.appendSlice(allocator, "RNGEN comment");
     field.bit_offset = 2;
     field.bit_width = 1;
 
@@ -669,16 +682,16 @@ test "Register Print" {
 
     var register = try Register.init(allocator, "PERIPH", 0b101, 0x20);
     defer register.deinit();
-    try register.name.appendSlice("RND");
-    try register.description.appendSlice("RND comment");
+    try register.name.appendSlice(allocator, "RND");
+    try register.description.appendSlice(allocator, "RND comment");
     register.address_offset = 0x100;
     register.size = 0x20;
 
     var field = try Field.init(allocator, "PERIPH", "RND", 0b101);
     defer field.deinit();
 
-    try field.name.appendSlice("RNGEN");
-    try field.description.appendSlice("RNGEN comment");
+    try field.name.appendSlice(allocator, "RNGEN");
+    try field.description.appendSlice(allocator, "RNGEN comment");
     field.bit_offset = 2;
     field.bit_width = 1;
     field.access = .ReadWrite; // write field will exist
@@ -686,14 +699,14 @@ test "Register Print" {
     var field2 = try Field.init(allocator, "PERIPH", "RND", 0b101);
     defer field2.deinit();
 
-    try field2.name.appendSlice("SEED");
-    try field2.description.appendSlice("SEED comment");
+    try field2.name.appendSlice(allocator, "SEED");
+    try field2.description.appendSlice(allocator, "SEED comment");
     field2.bit_offset = 10;
     field2.bit_width = 3;
     field2.access = .ReadWrite;
 
-    try register.fields.append(field);
-    try register.fields.append(field2);
+    try register.fields.append(allocator, field);
+    try register.fields.append(allocator, field2);
 
     try buf_stream.print("{}\n", .{register});
     std.testing.expectEqualSlices(u8, output_buffer.items, registerDesiredPrint);
@@ -737,22 +750,22 @@ test "Peripheral Print" {
 
     var peripheral = try Peripheral.init(allocator);
     defer peripheral.deinit();
-    try peripheral.name.appendSlice("PERIPH");
-    try peripheral.description.appendSlice("PERIPH comment");
+    try peripheral.name.appendSlice(allocator, "PERIPH");
+    try peripheral.description.appendSlice(allocator, "PERIPH comment");
     peripheral.base_address = 0x24000;
 
     var register = try Register.init(allocator, "PERIPH", 0b101, 0x20);
     defer register.deinit();
-    try register.name.appendSlice("RND");
-    try register.description.appendSlice("RND comment");
+    try register.name.appendSlice(allocator, "RND");
+    try register.description.appendSlice(allocator, "RND comment");
     register.address_offset = 0x100;
     register.size = 0x20;
 
     var field = try Field.init(allocator, "PERIPH", "RND", 0b101);
     defer field.deinit();
 
-    try field.name.appendSlice("RNGEN");
-    try field.description.appendSlice("RNGEN comment");
+    try field.name.appendSlice(allocator, "RNGEN");
+    try field.description.appendSlice(allocator, "RNGEN comment");
     field.bit_offset = 2;
     field.bit_width = 1;
     field.access = .ReadOnly; // since only register, write field will not exist
@@ -760,16 +773,16 @@ test "Peripheral Print" {
     var field2 = try Field.init(allocator, "PERIPH", "RND", 0b101);
     defer field2.deinit();
 
-    try field2.name.appendSlice("SEED");
-    try field2.description.appendSlice("SEED comment");
+    try field2.name.appendSlice(allocator, "SEED");
+    try field2.description.appendSlice(allocator, "SEED comment");
     field2.bit_offset = 10;
     field2.bit_width = 3;
     field2.access = .ReadWrite;
 
-    try register.fields.append(field);
-    try register.fields.append(field2);
+    try register.fields.append(allocator, field);
+    try register.fields.append(allocator, field2);
 
-    try peripheral.registers.append(register);
+    try peripheral.registers.append(allocator, register);
 
     try buf_stream.print("{}\n", .{peripheral});
     std.testing.expectEqualSlices(u8, peripheralDesiredPrint, output_buffer.items);
@@ -783,7 +796,9 @@ fn bitWidthToMask(width: u32) u32 {
             // This is needed to support both Zig 0.7 and 0.8
             const int_type_info =
                 if (@hasField(builtin.TypeInfo.Int, "signedness"))
-            .{ .signedness = .unsigned, .bits = i_use } else .{ .is_signed = false, .bits = i_use };
+                    .{ .signedness = .unsigned, .bits = i_use }
+                else
+                    .{ .is_signed = false, .bits = i_use };
 
             item.* = std.math.maxInt(@Type(builtin.TypeInfo{ .Int = int_type_info }));
         }

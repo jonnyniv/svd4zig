@@ -78,6 +78,13 @@ pub fn main() anyerror!void {
 
     const allocator = arena.allocator();
 
+    // Stdout is for the actual output of your application, for example if you
+    // are implementing gzip, then only the compressed bytes should be sent to
+    // stdout, not any debugging messages.
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout = &stdout_writer.interface;
+
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
 
@@ -86,16 +93,21 @@ pub fn main() anyerror!void {
 
     const file_name = args.next() orelse return error.MandatoryFilenameArgumentNotGiven;
     const file = try std.fs.cwd().openFile(file_name, .{.mode = .read_only});
+    defer file.close();
 
-    const stream = &file.reader();
+    var reader_buf: [1024]u8 = undefined;
+    var file_reader = file.reader(&reader_buf);
+    var reader = &file_reader.interface;
 
     var state = SvdParseState.Device;
     var dev = try svd.Device.init(allocator);
     var cur_interrupt: svd.Interrupt = undefined;
-    while (try stream.readUntilDelimiterOrEof(&line_buffer, '\n')) |line| {
-        if (line.len == 0) {
-            break;
-        }
+    var stream: std.Io.Writer = .fixed(&line_buffer);
+    var streamed_chars: usize = 1;
+    while (streamed_chars > 0) {
+        streamed_chars = reader.streamDelimiter(&stream, '\n') catch 0;
+        try reader.discardAll(1);
+        const line = stream.buffered();
         const chunk = getChunk(line) orelse continue;
         switch (state) {
             .Device => {
@@ -103,15 +115,15 @@ pub fn main() anyerror!void {
                     state = .Finished;
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "name")) {
                     if (chunk.data) |data| {
-                        try dev.name.insertSlice(0, data);
+                        try dev.name.insertSlice(dev.alloc, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "version")) {
                     if (chunk.data) |data| {
-                        try dev.version.insertSlice(0, data);
+                        try dev.version.insertSlice(dev.alloc, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "description")) {
                     if (chunk.data) |data| {
-                        try dev.description.insertSlice(0, data);
+                        try dev.description.insertSlice(dev.alloc, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "cpu")) {
                     const cpu = try svd.Cpu.init(allocator);
@@ -146,15 +158,15 @@ pub fn main() anyerror!void {
                     state = .Device;
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "name")) {
                     if (chunk.data) |data| {
-                        try dev.cpu.?.name.insertSlice(0, data);
+                        try dev.cpu.?.name.insertSlice(dev.alloc, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "revision")) {
                     if (chunk.data) |data| {
-                        try dev.cpu.?.revision.insertSlice(0, data);
+                        try dev.cpu.?.revision.insertSlice(dev.alloc, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "endian")) {
                     if (chunk.data) |data| {
-                        try dev.cpu.?.endian.insertSlice(0, data);
+                        try dev.cpu.?.endian.insertSlice(dev.alloc, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "mpuPresent")) {
                     if (chunk.data) |data| {
@@ -181,14 +193,14 @@ pub fn main() anyerror!void {
                     if (chunk.derivedFrom) |derivedFrom| {
                         for (dev.peripherals.items) |periph_being_checked| {
                             if (mem.eql(u8, periph_being_checked.name.items, derivedFrom)) {
-                                try dev.peripherals.append(try periph_being_checked.copy(allocator));
+                                try dev.peripherals.append(allocator, try periph_being_checked.copy(allocator));
                                 state = .Peripheral;
                                 break;
                             }
                         }
                     } else {
                         const periph = try svd.Peripheral.init(allocator);
-                        try dev.peripherals.append(periph);
+                        try dev.peripherals.append(allocator, periph);
                         state = .Peripheral;
                     }
                 }
@@ -200,21 +212,21 @@ pub fn main() anyerror!void {
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "name")) {
                     if (chunk.data) |data| {
                         // periph could be copy, must update periph name in sub-fields
-                        try cur_periph.name.replaceRange(0, cur_periph.name.items.len, data);
+                        try cur_periph.name.replaceRange(allocator, 0, cur_periph.name.items.len, data);
                         for (cur_periph.registers.items) |*reg| {
-                            try reg.periph_containing.replaceRange(0, reg.periph_containing.items.len, data);
+                            try reg.periph_containing.replaceRange(allocator, 0, reg.periph_containing.items.len, data);
                             for (reg.fields.items) |*field| {
-                                try field.periph.replaceRange(0, field.periph.items.len, data);
+                                try field.periph.replaceRange(allocator, 0, field.periph.items.len, data);
                             }
                         }
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "description")) {
                     if (chunk.data) |data| {
-                        try cur_periph.description.insertSlice(0, data);
+                        try cur_periph.description.insertSlice(allocator, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "groupName")) {
                     if (chunk.data) |data| {
-                        try cur_periph.group_name.insertSlice(0, data);
+                        try cur_periph.group_name.insertSlice(allocator, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "baseAddress")) {
                     if (chunk.data) |data| {
@@ -250,7 +262,7 @@ pub fn main() anyerror!void {
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "usage")) {
                     if (chunk.data) |data| {
-                        try address_block.usage.insertSlice(0, data);
+                        try address_block.usage.insertSlice(allocator, 0, data);
                     }
                 }
             },
@@ -278,11 +290,11 @@ pub fn main() anyerror!void {
                     state = .Peripheral;
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "name")) {
                     if (chunk.data) |data| {
-                        try cur_interrupt.name.insertSlice(0, data);
+                        try cur_interrupt.name.insertSlice(allocator, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "description")) {
                     if (chunk.data) |data| {
-                        try cur_interrupt.description.insertSlice(0, data);
+                        try cur_interrupt.description.insertSlice(allocator, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "value")) {
                     if (chunk.data) |data| {
@@ -298,7 +310,7 @@ pub fn main() anyerror!void {
                     const reset_value = dev.reg_default_reset_value orelse 0;
                     const size = dev.reg_default_size orelse 32;
                     const register = try svd.Register.init(allocator, cur_periph.name.items, reset_value, size);
-                    try cur_periph.registers.append(register);
+                    try cur_periph.registers.append(allocator, register);
                     state = .Register;
                 }
             },
@@ -309,15 +321,15 @@ pub fn main() anyerror!void {
                     state = .Registers;
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "name")) {
                     if (chunk.data) |data| {
-                        try cur_reg.name.insertSlice(0, data);
+                        try cur_reg.name.insertSlice(allocator, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "displayName")) {
                     if (chunk.data) |data| {
-                        try cur_reg.display_name.insertSlice(0, data);
+                        try cur_reg.display_name.insertSlice(allocator, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "description")) {
                     if (chunk.data) |data| {
-                        try cur_reg.description.insertSlice(0, data);
+                        try cur_reg.description.insertSlice(allocator, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "addressOffset")) {
                     if (chunk.data) |data| {
@@ -346,7 +358,7 @@ pub fn main() anyerror!void {
                     state = .Register;
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "field")) {
                     const field = try svd.Field.init(allocator, cur_periph.name.items, cur_reg.name.items, cur_reg.reset_value);
-                    try cur_reg.fields.append(field);
+                    try cur_reg.fields.append(allocator, field);
                     state = .Field;
                 }
             },
@@ -358,11 +370,11 @@ pub fn main() anyerror!void {
                     state = .Fields;
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "name")) {
                     if (chunk.data) |data| {
-                        try cur_field.name.insertSlice(0, data);
+                        try cur_field.name.insertSlice(allocator, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "description")) {
                     if (chunk.data) |data| {
-                        try cur_field.description.insertSlice(0, data);
+                        try cur_field.description.insertSlice(allocator, 0, data);
                     }
                 } else if (ascii.eqlIgnoreCase(chunk.tag, "bitOffset")) {
                     if (chunk.data) |data| {
@@ -382,13 +394,16 @@ pub fn main() anyerror!void {
                 // wait for EOF
             },
         }
+
+        _ = stream.consumeAll();
     }
     if (state == .Finished) {
-        try std.io.getStdOut().writer().print("{s}\n", .{register_def});
-        try std.io.getStdOut().writer().print("{}\n", .{dev});
+        try stdout.print("{s}\n", .{register_def});
+        try stdout.print("{f}\n", .{dev});
     } else {
         return error.InvalidXML;
     }
+    try stdout.flush();
 }
 
 const SvdParseState = enum {
