@@ -92,22 +92,22 @@ pub fn main() anyerror!void {
     // Note memory will be freed on exit since using arena
 
     const file_name = args.next() orelse return error.MandatoryFilenameArgumentNotGiven;
-    const file = try std.fs.cwd().openFile(file_name, .{.mode = .read_only});
+    const file = try std.fs.cwd().openFile(file_name, .{ .mode = .read_only });
     defer file.close();
 
     var reader_buf: [1024]u8 = undefined;
     var file_reader = file.reader(&reader_buf);
-    var reader = &file_reader.interface;
 
     var state = SvdParseState.Device;
     var dev = try svd.Device.init(allocator);
     var cur_interrupt: svd.Interrupt = undefined;
-    var stream: std.Io.Writer = .fixed(&line_buffer);
-    var streamed_chars: usize = 1;
-    while (streamed_chars > 0) {
-        streamed_chars = reader.streamDelimiter(&stream, '\n') catch 0;
-        try reader.discardAll(1);
-        const line = stream.buffered();
+    while (file_reader.interface.takeDelimiterExclusive('\n')) |line| {
+        file_reader.interface.discardAll(1) catch |err| switch (err) {
+            error.EndOfStream => {},
+            error.ReadFailed => {
+                return err;
+            },
+        };
         const chunk = getChunk(line) orelse continue;
         switch (state) {
             .Device => {
@@ -394,8 +394,11 @@ pub fn main() anyerror!void {
                 // wait for EOF
             },
         }
-
-        _ = stream.consumeAll();
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => {
+            return err;
+        },
     }
     if (state == .Finished) {
         try stdout.print("{s}\n", .{register_def});
