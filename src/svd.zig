@@ -476,7 +476,7 @@ pub const Register = struct {
         // print packed struct containing fields
         try writer.print(
             \\/// {s}
-            \\const {s}_val = packed struct {{
+            \\pub const {s}_val = packed struct {{
         , .{ name, name });
 
         // Sort fields from LSB to MSB for next step
