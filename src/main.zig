@@ -72,31 +72,30 @@ const register_def =
     \\
 ;
 
-pub fn main() anyerror!void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
+pub fn main(init: std.process.Init) anyerror!void {
 
-    const allocator = arena.allocator();
+    const allocator = init.arena.allocator();
+    const io = init.io;
 
     // Stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to
     // stdout, not any debugging messages.
     var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
     var stdout = &stdout_writer.interface;
 
-    var args = try std.process.argsWithAllocator(allocator);
+    var args = try init.minimal.args.iterateAllocator(allocator);
     defer args.deinit();
 
     _ = args.next(); // skip application name
     // Note memory will be freed on exit since using arena
 
     const file_name = args.next() orelse return error.MandatoryFilenameArgumentNotGiven;
-    const file = try std.fs.cwd().openFile(file_name, .{ .mode = .read_only });
-    defer file.close();
+    const file = try std.Io.Dir.cwd().openFile(io, file_name, .{ .mode = .read_only });
+    defer file.close(io);
 
     var reader_buf: [1024]u8 = undefined;
-    var file_reader = file.reader(&reader_buf);
+    var file_reader = file.reader(io, &reader_buf);
 
     var state = SvdParseState.Device;
     var dev = try svd.Device.init(allocator);

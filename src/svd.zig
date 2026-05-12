@@ -113,11 +113,11 @@ pub const Cpu = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator) !Self {
-        var name: ArrayList(u8) = .{};
+        var name: ArrayList(u8) = .empty;
         errdefer name.deinit(allocator);
-        var revision: ArrayList(u8) = .{};
+        var revision: ArrayList(u8) = .empty;
         errdefer revision.deinit(allocator);
-        var endian: ArrayList(u8) = .{};
+        var endian: ArrayList(u8) = .empty;
         errdefer endian.deinit(allocator);
 
         return Self{
@@ -181,13 +181,13 @@ pub const Peripheral = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator) !Self {
-        var name: ArrayList(u8) = .{};
+        var name: ArrayList(u8) = .empty;
         errdefer name.deinit(allocator);
-        var group_name: ArrayList(u8) = .{};
+        var group_name: ArrayList(u8) = .empty;
         errdefer group_name.deinit(allocator);
-        var description: ArrayList(u8) = .{};
+        var description: ArrayList(u8) = .empty;
         errdefer description.deinit(allocator);
-        var registers: Registers = .{};
+        var registers: Registers = .empty;
         errdefer registers.deinit(allocator);
 
         return Self{
@@ -268,7 +268,7 @@ pub const AddressBlock = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator) !Self {
-        var usage: ArrayList(u8) = .{};
+        var usage: ArrayList(u8) = .empty;
         errdefer usage.deinit(allocator);
 
         return Self{
@@ -295,9 +295,9 @@ pub const Interrupt = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator) !Self {
-        var name: ArrayList(u8) = .{};
+        var name: ArrayList(u8) = .empty;
         errdefer name.deinit(allocator);
-        var description: ArrayList(u8) = .{};
+        var description: ArrayList(u8) = .empty;
         errdefer description.deinit(allocator);
 
         return Self{
@@ -366,16 +366,16 @@ pub const Register = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator, periph: []const u8, reset_value: u32, size: u32) !Self {
-        var prefix: ArrayList(u8) = .{};
+        var prefix: ArrayList(u8) = .empty;
         errdefer prefix.deinit(allocator);
         try prefix.appendSlice(allocator, periph);
-        var name: ArrayList(u8) = .{};
+        var name: ArrayList(u8) = .empty;
         errdefer name.deinit(allocator);
-        var display_name: ArrayList(u8) = .{};
+        var display_name: ArrayList(u8) = .empty;
         errdefer display_name.deinit(allocator);
-        var description: ArrayList(u8) = .{};
+        var description: ArrayList(u8) = .empty;
         errdefer description.deinit(allocator);
-        var fields: Fields = .{};
+        var fields: Fields = .empty;
         errdefer fields.deinit(allocator);
 
         return Self{
@@ -538,15 +538,15 @@ pub const Field = struct {
     const Self = @This();
 
     pub fn init(allocator: Allocator, periph_containing: []const u8, register_containing: []const u8, register_reset_value: u32) !Self {
-        var periph: ArrayList(u8) = .{};
+        var periph: ArrayList(u8) = .empty;
         try periph.appendSlice(allocator, periph_containing);
         errdefer periph.deinit(allocator);
-        var register: ArrayList(u8) = .{};
+        var register: ArrayList(u8) = .empty;
         try register.appendSlice(allocator, register_containing);
         errdefer register.deinit(allocator);
-        var name: ArrayList(u8) = .{};
+        var name: ArrayList(u8) = .empty;
         errdefer name.deinit(allocator);
-        var description: ArrayList(u8) = .{};
+        var description: ArrayList(u8) = .empty;
         errdefer description.deinit(allocator);
 
         return Self{
@@ -793,14 +793,7 @@ fn bitWidthToMask(width: u32) u32 {
         const mask_array: [max_supported_bits + 1]u32 = undefined;
         inline for (mask_array, 0..) |*item, i| {
             const i_use = if (i == 0) max_supported_bits else i;
-            // This is needed to support both Zig 0.7 and 0.8
-            const int_type_info =
-                if (@hasField(builtin.TypeInfo.Int, "signedness"))
-                    .{ .signedness = .unsigned, .bits = i_use }
-                else
-                    .{ .is_signed = false, .bits = i_use };
-
-            item.* = std.math.maxInt(@Type(builtin.TypeInfo{ .Int = int_type_info }));
+            item.* = std.math.maxInt(@Int(.unsigned, i_use));
         }
         break :blk mask_array;
     };
