@@ -462,27 +462,27 @@ test "getChunk" {
     const expected_chunk = XmlChunk{ .tag = "name", .data = "STM32F7x7", .derivedFrom = null };
 
     const chunk = getChunk(valid_xml).?;
-    std.testing.expectEqualSlices(u8, chunk.tag, expected_chunk.tag);
-    std.testing.expectEqualSlices(u8, chunk.data.?, expected_chunk.data.?);
+    try std.testing.expectEqualSlices(u8, chunk.tag, expected_chunk.tag);
+    try std.testing.expectEqualSlices(u8, chunk.data.?, expected_chunk.data.?);
 
     const no_data_xml = "  <name> \n";
     const expected_no_data_chunk = XmlChunk{ .tag = "name", .data = null, .derivedFrom = null };
     const no_data_chunk = getChunk(no_data_xml).?;
-    std.testing.expectEqualSlices(u8, no_data_chunk.tag, expected_no_data_chunk.tag);
-    std.testing.expectEqual(no_data_chunk.data, expected_no_data_chunk.data);
+    try std.testing.expectEqualSlices(u8, no_data_chunk.tag, expected_no_data_chunk.tag);
+    try std.testing.expectEqual(no_data_chunk.data, expected_no_data_chunk.data);
 
     const comments_xml = "<description>Auxiliary Cache Control register</description>";
     const expected_comments_chunk = XmlChunk{ .tag = "description", .data = "Auxiliary Cache Control register", .derivedFrom = null };
     const comments_chunk = getChunk(comments_xml).?;
-    std.testing.expectEqualSlices(u8, comments_chunk.tag, expected_comments_chunk.tag);
-    std.testing.expectEqualSlices(u8, comments_chunk.data.?, expected_comments_chunk.data.?);
+    try std.testing.expectEqualSlices(u8, comments_chunk.tag, expected_comments_chunk.tag);
+    try std.testing.expectEqualSlices(u8, comments_chunk.data.?, expected_comments_chunk.data.?);
 
     const derived = "   <peripheral derivedFrom=\"TIM10\">";
     const expected_derived_chunk = XmlChunk{ .tag = "peripheral", .data = null, .derivedFrom = "TIM10" };
     const derived_chunk = getChunk(derived).?;
-    std.testing.expectEqualSlices(u8, derived_chunk.tag, expected_derived_chunk.tag);
-    std.testing.expectEqualSlices(u8, derived_chunk.derivedFrom.?, expected_derived_chunk.derivedFrom.?);
-    std.testing.expectEqual(derived_chunk.data, expected_derived_chunk.data);
+    try std.testing.expectEqualSlices(u8, derived_chunk.tag, expected_derived_chunk.tag);
+    try std.testing.expectEqualSlices(u8, derived_chunk.derivedFrom.?, expected_derived_chunk.derivedFrom.?);
+    try std.testing.expectEqual(derived_chunk.data, expected_derived_chunk.data);
 }
 
 fn textToBool(data: []const u8) ?bool {
